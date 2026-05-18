@@ -4,10 +4,10 @@ RAG (Retrieval-Augmented Generation) local yang dibangun dengan acuan:
 [theaiautomators/self-hosted-ai-starter-kit](https://github.com/theaiautomators/self-hosted-ai-starter-kit).
 
 Proyek ini berisi:
-- Stack Docker: `n8n + Ollama + Qdrant + PostgreSQL + Docling + static file server`
+- Stack Docker: `n8n + Ollama + Supabase Postgres (pgvector) + PostgreSQL + Docling + static file server`
 - Integrasi opsional `n8n-mcp` untuk akses MCP ke dokumentasi dan manajemen workflow n8n
 - Script RAG Python untuk:
-  - ingest dokumen (`txt`, `md`, `pdf`) ke Qdrant
+  - ingest dokumen (`txt`, `md`, `pdf`) ke Supabase lokal
   - query tanya-jawab berbasis konteks dokumen
 
 ## 1) Prasyarat
@@ -26,7 +26,7 @@ make up
 Service utama:
 - n8n: <http://localhost:5678>
 - Ollama API: <http://localhost:11434>
-- Qdrant: <http://localhost:6333>
+- Supabase Postgres: `localhost:${SUPABASE_DB_PORT:-54322}`
 - Docling: <http://localhost:5001>
 - Static file server: <http://localhost:8080>
 - n8n-mcp (opsional): <http://localhost:3000/mcp>
@@ -46,7 +46,7 @@ make ingest
 ```
 
 Hasil:
-- Chunk dokumen masuk ke collection Qdrant `pg_rag_2026` (default)
+- Chunk dokumen masuk ke tabel Supabase `rag_chunks` (default)
 - File dipindahkan ke `shared/rag-files/processed/`
 
 ## 4) Tanya RAG
@@ -57,7 +57,7 @@ make ask q="Apa isi utama dokumen yang sudah diupload?"
 
 Script akan:
 - buat embedding pertanyaan via Ollama (`nomic-embed-text`)
-- ambil konteks teratas dari Qdrant
+- ambil konteks teratas dari Supabase (pgvector similarity)
 - generate jawaban via Ollama (`llama3.2`)
 - tampilkan sumber chunk yang dipakai
 
@@ -66,8 +66,12 @@ Script akan:
 Atur variabel berikut di `.env` jika perlu:
 
 ```env
-QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=pg_rag_2026
+SUPABASE_DB_HOST=localhost
+SUPABASE_DB_PORT=54322
+SUPABASE_DB_NAME=postgres
+SUPABASE_DB_USER=supabase_admin
+SUPABASE_DB_PASSWORD=postgres
+SUPABASE_TABLE=rag_chunks
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBED_MODEL=nomic-embed-text
 OLLAMA_CHAT_MODEL=llama3.2
@@ -79,8 +83,8 @@ RAG_TOP_K=5
 ## 6) Struktur penting
 
 - `docker-compose.yml` - stack infrastruktur lokal
-- `rag/ingest.py` - indexing dokumen ke Qdrant
-- `rag/query.py` - retrieval + generation
+- `rag/ingest.py` - indexing dokumen ke Supabase (pgvector)
+- `rag/query.py` - retrieval + generation dari Supabase
 - `rag/requirements.txt` - dependensi Python
 - `shared/rag-files/pending/` - folder input dokumen
 - `shared/rag-files/processed/` - arsip dokumen terproses

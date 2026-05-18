@@ -1,3 +1,4 @@
-qdrant-client==1.10.1
 requests==2.32.3
 pypdf==5.0.1
+psycopg[binary]==3.2.13
+pgvector==0.3.6

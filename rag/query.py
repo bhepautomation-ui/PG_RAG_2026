@@ -3,11 +3,17 @@ import os
 import sys
 from typing import List
 
+import psycopg
 import requests
-from qdrant_client import QdrantClient
+from pgvector.psycopg import register_vector
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "pg_rag_2026")
+SUPABASE_DB_HOST = os.getenv("SUPABASE_DB_HOST", "localhost")
+SUPABASE_DB_PORT = int(os.getenv("SUPABASE_DB_PORT", "54322"))
+SUPABASE_DB_NAME = os.getenv("SUPABASE_DB_NAME", "postgres")
+SUPABASE_DB_USER = os.getenv("SUPABASE_DB_USER", "supabase_admin")
+SUPABASE_DB_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD", "postgres")
+SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "rag_chunks")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2")
@@ -32,8 +38,20 @@ def ollama_base_candidates() -> List[str]:
     return ordered
 
 
+def db_conn() -> psycopg.Connection:
+    conn = psycopg.connect(
+        host=SUPABASE_DB_HOST,
+        port=SUPABASE_DB_PORT,
+        dbname=SUPABASE_DB_NAME,
+        user=SUPABASE_DB_USER,
+        password=SUPABASE_DB_PASSWORD,
+        autocommit=True,
+    )
+    register_vector(conn)
+    return conn
+
+
 def embed(text: str) -> List[float]:
-    # Ollama setups vary: model might require ':latest'. Try both forms.
     candidates = [OLLAMA_EMBED_MODEL]
     if ":" not in OLLAMA_EMBED_MODEL:
         candidates.append(f"{OLLAMA_EMBED_MODEL}:latest")
@@ -90,34 +108,47 @@ def generate(prompt: str) -> str:
     raise ValueError("No working chat model found in Ollama")
 
 
+def to_vector_literal(values: List[float]) -> str:
+    return "[" + ",".join(str(v) for v in values) + "]"
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print('Usage: python rag/query.py "pertanyaan anda"')
         sys.exit(1)
 
     question = " ".join(sys.argv[1:]).strip()
-    client = QdrantClient(url=QDRANT_URL)
+    query_vector = to_vector_literal(embed(question))
 
-    query_vector = embed(question)
-    hits = client.search(
-        collection_name=QDRANT_COLLECTION,
-        query_vector=query_vector,
-        limit=TOP_K,
-        with_payload=True,
-    )
+    conn = db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    source,
+                    chunk_index,
+                    content,
+                    1 - (embedding <=> %s::vector) AS score
+                FROM {SUPABASE_TABLE}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (query_vector, query_vector, TOP_K),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
 
-    if not hits:
+    if not rows:
         print("Tidak ada konteks ditemukan. Jalankan ingest dulu.")
         return
 
     contexts = []
     sources = []
-    for i, hit in enumerate(hits, start=1):
-        payload = hit.payload or {}
-        source = payload.get("source", "unknown")
-        text = payload.get("text", "")
-        sources.append(f"[{i}] {source} (score={hit.score:.4f})")
-        contexts.append(f"Sumber {i} ({source}):\n{text}")
+    for i, (source, chunk_index, content, score) in enumerate(rows, start=1):
+        sources.append(f"[{i}] {source}#chunk-{chunk_index} (score={score:.4f})")
+        contexts.append(f"Sumber {i} ({source}):\n{content}")
 
     prompt = (
         "Kamu adalah asisten RAG. Jawab hanya berdasarkan konteks berikut. "

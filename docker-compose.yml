@@ -2,7 +2,7 @@ volumes:
   n8n_storage:
   postgres_storage:
   ollama_storage:
-  qdrant_storage:
+  supabase_db_storage:
   docling_data:
 
 networks:
@@ -170,16 +170,26 @@ services:
     depends_on:
       - n8n
 
-  qdrant:
-    image: qdrant/qdrant
-    hostname: qdrant
-    container_name: qdrant
+  supabase-db:
+    image: supabase/postgres:15.14.1.122
+    hostname: supabase-db
+    container_name: supabase-db
     networks: ['demo']
     restart: unless-stopped
     ports:
-      - 6333:6333
+      - ${SUPABASE_DB_PORT:-54322}:5432
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    environment:
+      - POSTGRES_DB=${SUPABASE_DB_NAME:-postgres}
+      - POSTGRES_USER=${SUPABASE_DB_USER:-supabase_admin}
+      - POSTGRES_PASSWORD=${SUPABASE_DB_PASSWORD:-postgres}
     volumes:
-      - qdrant_storage:/qdrant/storage
+      - supabase_db_storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${SUPABASE_DB_USER:-supabase_admin} -d ${SUPABASE_DB_NAME:-postgres}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   # ===========================================
   # Static File Server - Serves shared folder

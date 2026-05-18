@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-import hashlib
 import os
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
 
+import psycopg
 import requests
+from pgvector.psycopg import register_vector
 from pypdf import PdfReader
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as rest
 
 PENDING_DIR = Path("shared/rag-files/pending")
 PROCESSED_DIR = Path("shared/rag-files/processed")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "pg_rag_2026")
+
+SUPABASE_DB_HOST = os.getenv("SUPABASE_DB_HOST", "localhost")
+SUPABASE_DB_PORT = int(os.getenv("SUPABASE_DB_PORT", "54322"))
+SUPABASE_DB_NAME = os.getenv("SUPABASE_DB_NAME", "postgres")
+SUPABASE_DB_USER = os.getenv("SUPABASE_DB_USER", "supabase_admin")
+SUPABASE_DB_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD", "postgres")
+SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "rag_chunks")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "900"))
@@ -30,7 +35,7 @@ def ollama_base_candidates() -> List[str]:
                 OLLAMA_BASE_URL.replace("localhost", "[::1]"),
             ]
         )
-    # Keep order, remove duplicates.
+
     seen = set()
     ordered = []
     for item in bases:
@@ -38,6 +43,46 @@ def ollama_base_candidates() -> List[str]:
             ordered.append(item)
             seen.add(item)
     return ordered
+
+
+def db_conn() -> psycopg.Connection:
+    conn = psycopg.connect(
+        host=SUPABASE_DB_HOST,
+        port=SUPABASE_DB_PORT,
+        dbname=SUPABASE_DB_NAME,
+        user=SUPABASE_DB_USER,
+        password=SUPABASE_DB_PASSWORD,
+        autocommit=True,
+    )
+    register_vector(conn)
+    return conn
+
+
+def ensure_schema(conn: psycopg.Connection, vector_size: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {SUPABASE_TABLE} (
+                id BIGSERIAL PRIMARY KEY,
+                source TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                embedding VECTOR({vector_size}) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(source, chunk_index)
+            )
+            """
+        )
+        cur.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS {SUPABASE_TABLE}_embedding_ivfflat
+            ON {SUPABASE_TABLE}
+            USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 100)
+            """
+        )
 
 
 def read_text(path: Path) -> str:
@@ -70,7 +115,6 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
 
 
 def embed(text: str) -> List[float]:
-    # Ollama setups vary: model might require ':latest'. Try both forms.
     candidates = [OLLAMA_EMBED_MODEL]
     if ":" not in OLLAMA_EMBED_MODEL:
         candidates.append(f"{OLLAMA_EMBED_MODEL}:latest")
@@ -102,20 +146,6 @@ def embed(text: str) -> List[float]:
     raise ValueError("No working embedding model found in Ollama")
 
 
-def ensure_collection(client: QdrantClient, vector_size: int) -> None:
-    collections = {c.name for c in client.get_collections().collections}
-    if QDRANT_COLLECTION not in collections:
-        client.create_collection(
-            collection_name=QDRANT_COLLECTION,
-            vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
-        )
-
-
-def stable_id(source: str, chunk_index: int, chunk: str) -> int:
-    digest = hashlib.sha1(f"{source}:{chunk_index}:{chunk}".encode("utf-8")).hexdigest()
-    return int(digest[:15], 16)
-
-
 def iter_supported_files(directory: Path) -> Iterable[Path]:
     for path in sorted(directory.glob("*")):
         if path.is_file() and path.suffix.lower() in {".txt", ".md", ".pdf"}:
@@ -132,35 +162,41 @@ def main() -> None:
         return
 
     print(f"Found {len(files)} file(s) to process")
-    client = QdrantClient(url=QDRANT_URL)
 
-    points = []
+    rows = []
     for file_path in files:
         text = read_text(file_path)
         chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
         print(f"- {file_path.name}: {len(chunks)} chunks")
 
         for idx, chunk in enumerate(chunks):
-            vector = embed(chunk)
-            points.append(
-                rest.PointStruct(
-                    id=stable_id(file_path.name, idx, chunk),
-                    vector=vector,
-                    payload={
-                        "source": file_path.name,
-                        "chunk_index": idx,
-                        "text": chunk,
-                    },
-                )
-            )
+            rows.append((file_path.name, idx, chunk, embed(chunk)))
 
-    if not points:
+    if not rows:
         print("No chunks created. Nothing to index.")
         return
 
-    ensure_collection(client, len(points[0].vector))
-    client.upsert(collection_name=QDRANT_COLLECTION, points=points, wait=True)
-    print(f"Indexed {len(points)} chunk(s) to collection '{QDRANT_COLLECTION}'")
+    conn = db_conn()
+    try:
+        ensure_schema(conn, len(rows[0][3]))
+        with conn.cursor() as cur:
+            cur.executemany(
+                f"""
+                INSERT INTO {SUPABASE_TABLE} (source, chunk_index, content, embedding)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (source, chunk_index)
+                DO UPDATE SET
+                    content = EXCLUDED.content,
+                    embedding = EXCLUDED.embedding,
+                    updated_at = NOW()
+                """,
+                rows,
+            )
+            cur.execute(f"ANALYZE {SUPABASE_TABLE}")
+    finally:
+        conn.close()
+
+    print(f"Indexed {len(rows)} chunk(s) to Supabase table '{SUPABASE_TABLE}'")
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     for file_path in files:
