@@ -1,0 +1,318 @@
+volumes:
+  n8n_storage:
+  postgres_storage:
+  ollama_storage:
+  qdrant_storage:
+  docling_data:
+
+networks:
+  demo:
+
+x-n8n: &service-n8n
+  image: n8nio/n8n:latest
+  networks: ['demo']
+  environment:
+    - DB_TYPE=postgresdb
+    - DB_POSTGRESDB_HOST=postgres
+    - DB_POSTGRESDB_USER=${POSTGRES_USER}
+    - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    - N8N_DIAGNOSTICS_ENABLED=false
+    - N8N_PERSONALIZATION_ENABLED=false
+    - N8N_ENCRYPTION_KEY
+    - N8N_USER_MANAGEMENT_JWT_SECRET
+    - OLLAMA_HOST=${OLLAMA_HOST:-ollama:11434}
+    - N8N_RESTRICT_FILE_ACCESS_TO=/data/shared
+    - NODES_EXCLUDE=[]
+  env_file:
+    - path: .env
+      required: true
+
+x-ollama: &service-ollama
+  image: ollama/ollama:latest
+  container_name: ollama
+  networks: ['demo']
+  restart: unless-stopped
+  ports:
+    - 11434:11434
+  volumes:
+    - ollama_storage:/root/.ollama
+
+x-init-ollama: &init-ollama
+  image: ollama/ollama:latest
+  networks: ['demo']
+  container_name: ollama-pull-model
+  volumes:
+    - ollama_storage:/root/.ollama
+  entrypoint: /bin/sh
+  environment:
+    - OLLAMA_HOST=ollama:11434
+    - OLLAMA_PULL_MODEL=llama3.2
+  command:
+    - "-c"
+    - "sleep 3; ollama pull $${OLLAMA_PULL_MODEL}"
+
+# ===========================================
+# Docling Base Configuration (YAML Anchor)
+# ===========================================
+x-docling: &service-docling
+  image: ghcr.io/docling-project/docling-serve:main
+  container_name: docling
+  networks: ['demo']
+  restart: unless-stopped
+  # Run as root to fix bind mount permissions on Windows
+  user: root
+  # Override working directory so referenced images are saved to shared folder
+  working_dir: /shared/docling-scratch
+  expose:
+    - 5001/tcp
+  ports:
+    - 5001:5001
+  environment:
+    - DOCLING_SERVE_ENABLE_UI=true
+    # Store extracted images in shared folder accessible by other services
+    - DOCLING_SERVE_SCRATCH_PATH=/shared/docling-scratch
+    # Keep results after retrieval so other services can access them
+    - DOCLING_SERVE_SINGLE_USE_RESULTS=false
+    # Gradio security: allow writing to /shared directory
+    - GRADIO_ALLOWED_PATHS=/shared
+    - GRADIO_TEMP_DIR=/shared/docling-scratch
+    - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+  volumes:
+    - docling_data:/data
+    - ./shared:/shared
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    networks: ['demo']
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    volumes:
+      - postgres_storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  n8n-import:
+    <<: *service-n8n
+    hostname: n8n-import
+    container_name: n8n-import
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        # Only import if not already done (check marker file)
+        if [ -f /demo-data/.imported ]; then
+          echo "Demo data already imported - skipping"
+        else
+          echo "First run detected - importing demo data..."
+          n8n import:credentials --separate --input=/demo-data/credentials
+          n8n import:workflow --separate --input=/demo-data/workflows
+          touch /demo-data/.imported
+          echo "Import complete"
+        fi
+    volumes:
+      - ./n8n/demo-data:/demo-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    <<: *service-n8n
+    hostname: n8n
+    container_name: n8n
+    restart: unless-stopped
+    # Run as root to access shared files created by Docling (also running as root)
+    user: root
+    ports:
+      - 5678:5678
+    volumes:
+      - n8n_storage:/home/node/.n8n
+      - ./n8n/demo-data:/demo-data
+      - ./shared:/data/shared
+      - ./shared/rag-files:/data/rag-files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n-import:
+        condition: service_completed_successfully
+
+  qdrant:
+    image: qdrant/qdrant
+    hostname: qdrant
+    container_name: qdrant
+    networks: ['demo']
+    restart: unless-stopped
+    ports:
+      - 6333:6333
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  # ===========================================
+  # Static File Server - Serves shared folder
+  # ===========================================
+  # Access files at http://localhost:8080/
+  # Example: http://localhost:8080/extracted-images/image_xxx.png
+  static-files:
+    image: nginx:alpine
+    hostname: static-files
+    container_name: static-files
+    networks: ['demo']
+    restart: unless-stopped
+    ports:
+      - 8080:80
+    volumes:
+      - ./shared/extracted-images:/usr/share/nginx/html:ro
+    command: |
+      sh -c "echo 'server {
+        listen 80;
+        root /usr/share/nginx/html;
+        index chat.html;
+        autoindex on;
+        location / {
+          try_files \$$uri \$$uri/ =404;
+          add_header Access-Control-Allow-Origin *;
+        }
+      }' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+
+  ollama-cpu:
+    profiles: ["cpu"]
+    <<: *service-ollama
+
+  ollama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *service-ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama-gpu-amd:
+    profiles: ["gpu-amd"]
+    <<: *service-ollama
+    image: ollama/ollama:rocm
+    devices:
+      - "/dev/kfd"
+      - "/dev/dri"
+
+  ollama-pull-llama-cpu:
+    profiles: ["cpu"]
+    <<: *init-ollama
+    container_name: ollama-pull-llama-cpu
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_PULL_MODEL=llama3.2
+    depends_on:
+      - ollama-cpu
+
+  ollama-pull-llama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *init-ollama
+    container_name: ollama-pull-llama-gpu
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_PULL_MODEL=llama3.2
+    depends_on:
+      - ollama-gpu
+
+  ollama-pull-llama-gpu-amd:
+    profiles: [gpu-amd]
+    <<: *init-ollama
+    container_name: ollama-pull-llama-gpu-amd
+    image: ollama/ollama:rocm
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_PULL_MODEL=llama3.2
+    depends_on:
+      - ollama-gpu-amd
+
+  ollama-pull-embed-cpu:
+    profiles: ["cpu"]
+    <<: *init-ollama
+    container_name: ollama-pull-embed-cpu
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_PULL_MODEL=nomic-embed-text
+    depends_on:
+      - ollama-cpu
+
+  ollama-pull-embed-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *init-ollama
+    container_name: ollama-pull-embed-gpu
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_PULL_MODEL=nomic-embed-text
+    depends_on:
+      - ollama-gpu
+
+  ollama-pull-embed-gpu-amd:
+    profiles: [gpu-amd]
+    <<: *init-ollama
+    container_name: ollama-pull-embed-gpu-amd
+    image: ollama/ollama:rocm
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_PULL_MODEL=nomic-embed-text
+    depends_on:
+      - ollama-gpu-amd
+
+  # ===========================================
+  # Docling - Document Processing
+  # ===========================================
+  # OCR and document parsing service
+  # Accessible at http://localhost:5001
+  # Uses profiles: cpu, gpu-nvidia, gpu-amd
+  # Docs: https://github.com/docling-project/docling-serve
+
+  docling-cpu:
+    profiles: ["cpu"]
+    <<: *service-docling
+
+  docling-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *service-docling
+    image: ghcr.io/docling-project/docling-serve-cu126:main
+    environment:
+      - DOCLING_SERVE_ENABLE_UI=true
+      - DOCLING_SERVE_SCRATCH_PATH=/shared/docling-scratch
+      - DOCLING_SERVE_SINGLE_USE_RESULTS=false
+      - GRADIO_ALLOWED_PATHS=/shared
+      - GRADIO_TEMP_DIR=/shared/docling-scratch
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+    runtime: nvidia
+
+  docling-gpu-amd:
+    profiles: ["gpu-amd"]
+    <<: *service-docling
+    image: ghcr.io/docling-project/docling-serve-rocm:main
+    environment:
+      - DOCLING_SERVE_ENABLE_UI=true
+      - DOCLING_SERVE_SCRATCH_PATH=/shared/docling-scratch
+      - DOCLING_SERVE_SINGLE_USE_RESULTS=false
+      - GRADIO_ALLOWED_PATHS=/shared
+      - GRADIO_TEMP_DIR=/shared/docling-scratch
+      - ROCR_VISIBLE_DEVICES=0
+      - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - 44    # video group GID (run: getent group video)
+      - 109   # render group GID (run: getent group render)

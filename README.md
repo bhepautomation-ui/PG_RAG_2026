@@ -1,0 +1,109 @@
+# PG_RAG_2026
+
+RAG (Retrieval-Augmented Generation) local yang dibangun dengan acuan:
+[theaiautomators/self-hosted-ai-starter-kit](https://github.com/theaiautomators/self-hosted-ai-starter-kit).
+
+Proyek ini berisi:
+- Stack Docker: `n8n + Ollama + Qdrant + PostgreSQL + Docling + static file server`
+- Script RAG Python untuk:
+  - ingest dokumen (`txt`, `md`, `pdf`) ke Qdrant
+  - query tanya-jawab berbasis konteks dokumen
+
+## 1) Prasyarat
+
+- Docker + Docker Compose
+- Python 3.10+
+
+## 2) Setup cepat
+
+```bash
+cp .env.example .env
+make setup
+make up
+```
+
+Service utama:
+- n8n: <http://localhost:5678>
+- Ollama API: <http://localhost:11434>
+- Qdrant: <http://localhost:6333>
+- Docling: <http://localhost:5001>
+- Static file server: <http://localhost:8080>
+
+## 3) Ingest dokumen ke knowledge base
+
+Taruh file di:
+- `shared/rag-files/pending/`
+
+Format yang didukung:
+- `.txt`, `.md`, `.pdf`
+
+Lalu jalankan:
+
+```bash
+make ingest
+```
+
+Hasil:
+- Chunk dokumen masuk ke collection Qdrant `pg_rag_2026` (default)
+- File dipindahkan ke `shared/rag-files/processed/`
+
+## 4) Tanya RAG
+
+```bash
+make ask q="Apa isi utama dokumen yang sudah diupload?"
+```
+
+Script akan:
+- buat embedding pertanyaan via Ollama (`nomic-embed-text`)
+- ambil konteks teratas dari Qdrant
+- generate jawaban via Ollama (`llama3.2`)
+- tampilkan sumber chunk yang dipakai
+
+## 5) Konfigurasi environment
+
+Atur variabel berikut di `.env` jika perlu:
+
+```env
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION=pg_rag_2026
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_CHAT_MODEL=llama3.2
+RAG_CHUNK_SIZE=900
+RAG_CHUNK_OVERLAP=150
+RAG_TOP_K=5
+```
+
+## 6) Struktur penting
+
+- `docker-compose.yml` - stack infrastruktur lokal
+- `rag/ingest.py` - indexing dokumen ke Qdrant
+- `rag/query.py` - retrieval + generation
+- `rag/requirements.txt` - dependensi Python
+- `shared/rag-files/pending/` - folder input dokumen
+- `shared/rag-files/processed/` - arsip dokumen terproses
+
+## 7) Publish ke GitHub (repo: PG_RAG_2026)
+
+Jika belum login GitHub CLI:
+
+```bash
+gh auth login
+```
+
+Lalu:
+
+```bash
+git init
+git add .
+git commit -m "feat: bootstrap PG_RAG_2026 from self-hosted AI starter kit"
+git branch -M main
+gh repo create PG_RAG_2026 --public --source=. --remote=origin --push
+```
+
+Jika ingin private, ganti `--public` menjadi `--private`.
+
+## Kredit
+
+- Base template: [theaiautomators/self-hosted-ai-starter-kit](https://github.com/theaiautomators/self-hosted-ai-starter-kit)
+- Original upstream: [n8n-io/self-hosted-ai-starter-kit](https://github.com/n8n-io/self-hosted-ai-starter-kit)

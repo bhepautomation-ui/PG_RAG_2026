@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Local RAG Agent</title>
+  <link href="https://cdn.jsdelivr.net/npm/@n8n/chat@1.0.0/dist/style.css" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0c0c10;
+      --bg-secondary: #14141a;
+      --bg-card: #1c1c26;
+      --accent-primary: #6366f1;
+      --accent-secondary: #22d3ee;
+      --accent-glow: rgba(99, 102, 241, 0.4);
+      --text-primary: #f4f4f6;
+      --text-secondary: #9898a8;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Instrument Sans', system-ui, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Animated mesh gradient background */
+    .bg-mesh {
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      background: 
+        radial-gradient(ellipse 100% 80% at 10% 0%, rgba(99, 102, 241, 0.2) 0%, transparent 50%),
+        radial-gradient(ellipse 80% 60% at 90% 100%, rgba(34, 211, 238, 0.15) 0%, transparent 50%),
+        radial-gradient(ellipse 60% 40% at 50% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 60%);
+    }
+
+    /* Noise texture overlay */
+    .noise-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      opacity: 0.03;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    }
+
+    .container {
+      width: 100%;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 1.5rem;
+      gap: 1rem;
+    }
+
+    header {
+      text-align: center;
+      padding: 0.5rem 0;
+      animation: fadeIn 0.6s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .title-wrapper {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    /* Reset button styling */
+    .reset-btn {
+      position: absolute;
+      top: 1rem;
+      right: 1.25rem;
+      width: 36px;
+      height: 36px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: var(--text-secondary);
+    }
+
+    .reset-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+      color: var(--text-primary);
+      transform: rotate(45deg);
+    }
+
+    .reset-btn:active {
+      transform: rotate(180deg);
+    }
+
+    .reset-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .chat-container {
+      position: relative;
+    }
+
+    .title-icon {
+      width: 42px;
+      height: 42px;
+      background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .chat-container {
+      flex: 1;
+      min-height: 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 
+        0 0 0 1px rgba(255, 255, 255, 0.05),
+        0 20px 50px -12px rgba(0, 0, 0, 0.5),
+        0 0 100px -20px var(--accent-glow);
+      animation: slideUp 0.5s ease-out 0.1s both;
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    #n8n-chat {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* n8n Chat Widget Customizations - Full mode */
+    :root {
+      --chat--color-primary: #6366f1;
+      --chat--color-primary-shade-50: rgba(99, 102, 241, 0.5);
+      --chat--color-primary-shade-100: rgba(99, 102, 241, 0.2);
+      --chat--color-secondary: #22d3ee;
+      --chat--color-white: #f4f4f6;
+      --chat--color-light: #1c1c26;
+      --chat--color-light-shade-50: #14141a;
+      --chat--color-medium: #9898a8;
+      --chat--color-dark: #0c0c10;
+      --chat--color-disabled: #3a3a4a;
+      --chat--color-typing: #9898a8;
+      --chat--spacing: 1rem;
+      --chat--border-radius: 16px;
+      --chat--transition-duration: 0.2s;
+      --chat--textarea--height: 56px;
+      --chat--header--background: linear-gradient(180deg, #1c1c26 0%, #14141a 100%);
+      --chat--header--color: #f4f4f6;
+      --chat--message--bot--background: #252532;
+      --chat--message--bot--color: #f4f4f6;
+      --chat--message--user--background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      --chat--message--user--color: #ffffff;
+      --chat--message--pre--background: #0c0c10;
+      --chat--window--background: #14141a;
+      --chat--input--background: #1c1c26;
+      --chat--input--border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* Override chat widget styles for fullscreen embedded mode */
+    .chat-container :deep(.n8n-chat),
+    .chat-container .n8n-chat {
+      height: 100% !important;
+      max-height: 100% !important;
+    }
+
+    /* Chat messages styling fixes - comprehensive selectors */
+    [class*="chat-message"] {
+      max-width: 85% !important;
+    }
+
+    /* Bot messages - all possible selectors */
+    [class*="chat-message-bot"],
+    [class*="message-bot"],
+    [class*="bot-message"],
+    .chat-message.bot,
+    [data-type="bot"] {
+      background: #252532 !important;
+      color: #f4f4f6 !important;
+      border-radius: 16px 16px 16px 4px !important;
+      padding: 1rem 1.25rem !important;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+    }
+
+    /* User messages - all possible selectors */
+    [class*="chat-message-user"],
+    [class*="message-user"],
+    [class*="user-message"],
+    .chat-message.user,
+    [data-type="user"],
+    [class*="chat-message"][class*="from-user"],
+    [class*="message"][class*="outgoing"] {
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+      color: #ffffff !important;
+      border-radius: 16px 16px 4px 16px !important;
+      padding: 1rem 1.25rem !important;
+      box-shadow: 0 2px 12px rgba(99, 102, 241, 0.3) !important;
+    }
+
+    /* Target n8n chat specific user message wrapper */
+    .chat-message-row.from-user .chat-message-bubble,
+    [class*="chat-message-row"][class*="from-user"] [class*="bubble"],
+    [class*="from-user"] [class*="chat-message-text"],
+    [class*="from-user"] [class*="message-content"] {
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+      color: #ffffff !important;
+      border-radius: 16px 16px 4px 16px !important;
+      padding: 0.875rem 1.125rem !important;
+      box-shadow: 0 2px 12px rgba(99, 102, 241, 0.3) !important;
+    }
+
+    /* Fix text colors in bot messages */
+    [class*="chat-message-bot"] p,
+    [class*="chat-message-bot"] span,
+    [class*="chat-message-bot"] div,
+    [class*="message-bot"] p,
+    [class*="message-bot"] span,
+    [class*="bot-message"] p,
+    [class*="bot-message"] span {
+      color: #f4f4f6 !important;
+    }
+
+    /* Fix text colors in user messages */
+    [class*="chat-message-user"] p,
+    [class*="chat-message-user"] span,
+    [class*="chat-message-user"] div,
+    [class*="message-user"] p,
+    [class*="message-user"] span,
+    [class*="user-message"] p,
+    [class*="user-message"] span {
+      color: #ffffff !important;
+    }
+
+    /* Code blocks in messages */
+    [class*="chat-message"] pre,
+    [class*="chat-message"] code {
+      background: #0c0c10 !important;
+      color: #22d3ee !important;
+      border-radius: 8px !important;
+      font-family: 'IBM Plex Mono', monospace !important;
+    }
+
+    /* Message text wrapper styling */
+    [class*="chat-message-markdown"],
+    [class*="message-text"],
+    [class*="chat-text"] {
+      color: inherit !important;
+    }
+
+    /* Input area styling */
+    .n8n-chat .chat-input {
+      background: #1c1c26 !important;
+      border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+      padding: 1rem !important;
+    }
+
+    .n8n-chat .chat-input textarea {
+      background: #252532 !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      border-radius: 12px !important;
+      color: #f4f4f6 !important;
+      font-family: 'Instrument Sans', system-ui, sans-serif !important;
+      padding: 0.875rem 1rem !important;
+    }
+
+    .n8n-chat .chat-input textarea::placeholder {
+      color: #6a6a7a !important;
+    }
+
+    .n8n-chat .chat-input textarea:focus {
+      border-color: rgba(99, 102, 241, 0.5) !important;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+      outline: none !important;
+    }
+
+    /* Send button */
+    .n8n-chat .chat-input button {
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+      border: none !important;
+      border-radius: 10px !important;
+      color: #ffffff !important;
+      transition: all 0.2s ease !important;
+    }
+
+    .n8n-chat .chat-input button:hover {
+      transform: scale(1.05) !important;
+      box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4) !important;
+    }
+
+    /* Welcome screen customization */
+    .n8n-chat .chat-welcome {
+      background: #14141a !important;
+      padding: 2rem !important;
+    }
+
+    .n8n-chat .chat-welcome h1,
+    .n8n-chat .chat-welcome h2,
+    .n8n-chat .chat-welcome h3 {
+      color: #f4f4f6 !important;
+    }
+
+    .n8n-chat .chat-welcome p {
+      color: #9898a8 !important;
+    }
+
+    .n8n-chat .chat-welcome button {
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+      border: none !important;
+      border-radius: 12px !important;
+      color: #ffffff !important;
+      font-weight: 600 !important;
+      padding: 0.875rem 1.75rem !important;
+      transition: all 0.2s ease !important;
+    }
+
+    .n8n-chat .chat-welcome button:hover {
+      transform: translateY(-2px) !important;
+      box-shadow: 0 8px 25px rgba(99, 102, 241, 0.4) !important;
+    }
+
+    /* Header styling */
+    .n8n-chat .chat-header {
+      background: linear-gradient(180deg, #1c1c26 0%, #14141a 100%) !important;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+      padding: 1rem 1.25rem !important;
+    }
+
+    .n8n-chat .chat-header h1,
+    .n8n-chat .chat-header span {
+      color: #f4f4f6 !important;
+    }
+
+    /* Scrollbar styling */
+    .n8n-chat ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .n8n-chat ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .n8n-chat ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+
+    .n8n-chat ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Initial messages styling */
+    .n8n-chat .chat-message-initial {
+      background: #252532 !important;
+      color: #f4f4f6 !important;
+    }
+
+    /* Typing indicator */
+    .n8n-chat .chat-typing {
+      color: #9898a8 !important;
+    }
+
+    @media (max-width: 640px) {
+      .container {
+        padding: 1rem;
+      }
+      
+      h1 {
+        font-size: 1.35rem;
+      }
+
+      .title-icon {
+        width: 36px;
+        height: 36px;
+        font-size: 1.1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-mesh"></div>
+  <div class="noise-overlay"></div>
+  
+  <div class="container">
+    <header>
+      <div class="title-wrapper">
+        <div class="title-icon">🧠</div>
+        <h1>Your Local RAG Agent</h1>
+      </div>
+    </header>
+
+    <div class="chat-container">
+      <button class="reset-btn" onclick="resetConversation()" title="Clear conversation">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+      <div id="n8n-chat"></div>
+    </div>
+  </div>
+
+  <script>
+    // Reset conversation function - clears session storage and reloads
+    function resetConversation() {
+      try {
+        // Clear n8n chat session from localStorage
+        localStorage.removeItem('n8n-chat/sessionId');
+        
+        // Clear any other n8n-chat related keys
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('n8n-chat/')) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+      } catch (e) {
+        console.warn('Error clearing localStorage:', e);
+      }
+
+      try {
+        // Clear from sessionStorage as well
+        sessionStorage.removeItem('n8n-chat/sessionId');
+        
+        const sessionKeysToRemove = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          if (key && key.startsWith('n8n-chat/')) {
+            sessionKeysToRemove.push(key);
+          }
+        }
+        sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
+      } catch (e) {
+        console.warn('Error clearing sessionStorage:', e);
+      }
+
+      // Reload the page to start fresh
+      location.reload();
+    }
+  </script>
+
+  <script type="module">
+    import { createChat } from 'https://cdn.jsdelivr.net/npm/@n8n/chat@1.0.0/dist/chat.bundle.es.js';
+
+    createChat({
+      webhookUrl: 'http://localhost:5678/webhook/<YOUR-WEBHOOK-ID>/chat',
+      target: '#n8n-chat',
+      mode: 'fullscreen',
+      showWelcomeScreen: false,
+      defaultLanguage: 'en',
+      initialMessages: [
+        'Hello! 👋',
+        'I\'m your local RAG agent. Ask me anything about your documents.',
+      ],
+      i18n: {
+        en: {
+          title: 'RAG Agent',
+          subtitle: 'Ask questions about your documents',
+          footer: '',
+          getStarted: 'Start Chatting',
+          inputPlaceholder: 'Ask me anything...',
+          closeButtonTooltip: 'Close chat',
+        },
+      },
+      webhookConfig: {
+        method: 'POST',
+        headers: {}
+      },
+      chatInputKey: 'chatInput',
+      loadPreviousSession: true,
+      enableStreaming: true,
+    });
+  </script>
+</body>
+</html>
