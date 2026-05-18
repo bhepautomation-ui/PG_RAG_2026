@@ -157,7 +157,7 @@ services:
     networks: ['demo']
     restart: unless-stopped
     ports:
-      - 3000:3000
+      - ${N8N_MCP_PORT:-3000}:3000
     environment:
       - N8N_MODE=true
       - MCP_MODE=http

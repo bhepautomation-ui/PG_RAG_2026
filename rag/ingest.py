@@ -21,6 +21,25 @@ CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "900"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
 
 
+def ollama_base_candidates() -> List[str]:
+    bases = [OLLAMA_BASE_URL]
+    if "localhost" in OLLAMA_BASE_URL:
+        bases.extend(
+            [
+                OLLAMA_BASE_URL.replace("localhost", "127.0.0.1"),
+                OLLAMA_BASE_URL.replace("localhost", "[::1]"),
+            ]
+        )
+    # Keep order, remove duplicates.
+    seen = set()
+    ordered = []
+    for item in bases:
+        if item not in seen:
+            ordered.append(item)
+            seen.add(item)
+    return ordered
+
+
 def read_text(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in {".txt", ".md"}:
@@ -51,14 +70,36 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
 
 
 def embed(text: str) -> List[float]:
-    response = requests.post(
-        f"{OLLAMA_BASE_URL}/api/embeddings",
-        json={"model": OLLAMA_EMBED_MODEL, "prompt": text},
-        timeout=120,
-    )
-    response.raise_for_status()
-    body = response.json()
-    return body["embedding"]
+    # Ollama setups vary: model might require ':latest'. Try both forms.
+    candidates = [OLLAMA_EMBED_MODEL]
+    if ":" not in OLLAMA_EMBED_MODEL:
+        candidates.append(f"{OLLAMA_EMBED_MODEL}:latest")
+
+    for base_url in ollama_base_candidates():
+        for model_name in candidates:
+            response = requests.post(
+                f"{base_url}/api/embed",
+                json={"model": model_name, "input": text},
+                timeout=120,
+            )
+            if response.status_code == 404:
+                legacy = requests.post(
+                    f"{base_url}/api/embeddings",
+                    json={"model": model_name, "prompt": text},
+                    timeout=120,
+                )
+                if legacy.status_code == 404:
+                    continue
+                legacy.raise_for_status()
+                return legacy.json()["embedding"]
+
+            response.raise_for_status()
+            body = response.json()
+            embeddings = body.get("embeddings", [])
+            if embeddings:
+                return embeddings[0]
+
+    raise ValueError("No working embedding model found in Ollama")
 
 
 def ensure_collection(client: QdrantClient, vector_size: int) -> None:

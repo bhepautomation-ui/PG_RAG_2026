@@ -93,6 +93,7 @@ RAG_TOP_K=5
 
 ```env
 N8N_MCP_AUTH_TOKEN=replace-with-32-char-minimum-token
+N8N_MCP_PORT=3000
 N8N_API_KEY= # opsional, untuk workflow management
 ```
 
@@ -105,7 +106,7 @@ make up-mcp
 3. Endpoint MCP yang dipakai client:
 
 ```text
-http://localhost:3000/mcp
+http://localhost:${N8N_MCP_PORT:-3000}/mcp
 ```
 
 4. Header auth yang dibutuhkan:
