@@ -227,7 +227,7 @@
         },
         "driveId": {
           "mode": "id",
-          "value": "={{ $env.GDRIVE_DRIVE_ID }}"
+          "value": "={{ $env.GDRIVE_DRIVE_ID || 'My Drive' }}"
         },
         "folderId": {
           "mode": "id",

@@ -81,7 +81,8 @@ RAG_CHUNK_OVERLAP=150
 RAG_TOP_K=5
 GDRIVE_INBOX_FOLDER_ID=
 GDRIVE_PROCESSED_FOLDER_ID=
-GDRIVE_DRIVE_ID=
+# Optional, default "My Drive"
+GDRIVE_DRIVE_ID=My Drive
 ```
 
 ## 6) Struktur penting
@@ -116,7 +117,7 @@ Google Drive ingest:
 1. Isi `.env`:
    - `GDRIVE_INBOX_FOLDER_ID`
    - `GDRIVE_PROCESSED_FOLDER_ID`
-   - `GDRIVE_DRIVE_ID`
+   - `GDRIVE_DRIVE_ID` (opsional; default `My Drive`)
 2. Di n8n, pasang credential `Google Drive account`.
 3. Aktivasi workflow Google Drive.
 4. Upload file ke folder inbox; setelah sukses ingest, file dipindah ke folder processed otomatis.
