@@ -1,0 +1,382 @@
+{
+  "createdAt": "2026-05-18T03:37:00.000Z",
+  "updatedAt": "2026-05-18T03:37:00.000Z",
+  "id": "pgRAG2026GoogleDriveIngest",
+  "name": "PG_RAG_2026 - Google Drive Inbox to Supabase RAG",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "mode": "id",
+          "value": "={{ $env.GDRIVE_INBOX_FOLDER_ID }}"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "id": "drive-trigger",
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -780,
+        30
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.name || '' }}",
+              "operation": "regex",
+              "value2": "(?i)\\.(pdf|txt|md)$"
+            }
+          ]
+        }
+      },
+      "id": "if-supported",
+      "name": "IF Supported File",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -550,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "options": {
+          "binaryPropertyName": "data",
+          "fileName": "={{ $json.name }}"
+        }
+      },
+      "id": "download-file",
+      "name": "Download from Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -320,
+        -70
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/data/rag-files/pending/{{$binary.data.fileName || $json.name}}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "save-local",
+      "name": "Save File to Repo Pending",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -90,
+        -70
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://docling:5001/v1/convert/file",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "files",
+              "parameterType": "formBinaryData",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "target_type",
+              "parameterType": "formData",
+              "value": "inbody"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "autodetect"
+            }
+          }
+        }
+      },
+      "id": "docling-convert",
+      "name": "Docling Convert (Save images in repo scratch)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        140,
+        -70
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Save File to Repo Pending').first();\nconst fileName = input.binary?.data?.fileName || input.json?.name;\nif (!fileName) throw new Error('Tidak menemukan nama file setelah download.');\nreturn [{ json: { fileName, sourceDriveFileId: $('Google Drive Trigger').first().json.id } }];"
+      },
+      "id": "prepare-file",
+      "name": "Prepare File Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        370,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://rag-api:8800/source/{{$json.fileName}}/count",
+        "sendBody": false,
+        "options": {}
+      },
+      "id": "check-db",
+      "name": "Check Existing Chunks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.chunk_count || 0 }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-db-exists",
+      "name": "IF Existing Chunks > 0",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        830,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=http://rag-api:8800/source/{{$('Prepare File Name').item.json.fileName}}",
+        "sendBody": false,
+        "options": {}
+      },
+      "id": "delete-old",
+      "name": "Delete Existing Source",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1060,
+        -70
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://rag-api:8800/ingest",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { files: [$('Prepare File Name').item.json.fileName], replace_existing: true } }}",
+        "options": {}
+      },
+      "id": "ingest",
+      "name": "Ingest to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1290,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "move",
+        "fileId": {
+          "mode": "id",
+          "value": "={{ $('Google Drive Trigger').item.json.id }}"
+        },
+        "driveId": {
+          "mode": "id",
+          "value": "={{ $env.GDRIVE_DRIVE_ID }}"
+        },
+        "folderId": {
+          "mode": "id",
+          "value": "={{ $env.GDRIVE_PROCESSED_FOLDER_ID }}"
+        }
+      },
+      "id": "move-processed",
+      "name": "Move File to Processed Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1520,
+        30
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "IF Supported File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Supported File": {
+      "main": [
+        [
+          {
+            "node": "Download from Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Download from Drive": {
+      "main": [
+        [
+          {
+            "node": "Save File to Repo Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save File to Repo Pending": {
+      "main": [
+        [
+          {
+            "node": "Docling Convert (Save images in repo scratch)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Docling Convert (Save images in repo scratch)": {
+      "main": [
+        [
+          {
+            "node": "Prepare File Name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare File Name": {
+      "main": [
+        [
+          {
+            "node": "Check Existing Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Existing Chunks": {
+      "main": [
+        [
+          {
+            "node": "IF Existing Chunks > 0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Existing Chunks > 0": {
+      "main": [
+        [
+          {
+            "node": "Delete Existing Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ingest to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Existing Source": {
+      "main": [
+        [
+          {
+            "node": "Ingest to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Move File to Processed Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "versionId": "80992595-d4ae-495b-8b47-5ea7438bc64d",
+  "triggerCount": 0,
+  "tags": []
+}

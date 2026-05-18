@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import os
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Sequence
 
 import psycopg
 import requests
@@ -24,6 +25,14 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "900"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
+
+
+@dataclass
+class IngestResult:
+    files_processed: int
+    chunks_indexed: int
+    deleted_rows: int
+    moved_files: List[str]
 
 
 def ollama_base_candidates() -> List[str]:
@@ -83,6 +92,39 @@ def ensure_schema(conn: psycopg.Connection, vector_size: int) -> None:
             WITH (lists = 100)
             """
         )
+
+
+def count_source_chunks(source_name: str) -> int:
+    conn = db_conn()
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    f"SELECT COUNT(*) FROM {SUPABASE_TABLE} WHERE source = %s",
+                    (source_name,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+            except psycopg.errors.UndefinedTable:
+                return 0
+    finally:
+        conn.close()
+
+
+def delete_source_chunks(source_name: str) -> int:
+    conn = db_conn()
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    f"DELETE FROM {SUPABASE_TABLE} WHERE source = %s",
+                    (source_name,),
+                )
+                return cur.rowcount
+            except psycopg.errors.UndefinedTable:
+                return 0
+    finally:
+        conn.close()
 
 
 def read_text(path: Path) -> str:
@@ -152,34 +194,44 @@ def iter_supported_files(directory: Path) -> Iterable[Path]:
             yield path
 
 
-def main() -> None:
+def _resolve_files(target_files: Sequence[str] | None) -> List[Path]:
+    if target_files:
+        files = [PENDING_DIR / Path(file_name).name for file_name in target_files]
+        return [path for path in files if path.exists() and path.is_file()]
+    return list(iter_supported_files(PENDING_DIR))
+
+
+def ingest_pending_files(target_files: Sequence[str] | None = None, replace_existing: bool = True) -> IngestResult:
     PENDING_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-    files = list(iter_supported_files(PENDING_DIR))
+    files = _resolve_files(target_files)
     if not files:
-        print("No files found in shared/rag-files/pending")
-        return
-
-    print(f"Found {len(files)} file(s) to process")
+        return IngestResult(files_processed=0, chunks_indexed=0, deleted_rows=0, moved_files=[])
 
     rows = []
     for file_path in files:
         text = read_text(file_path)
         chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
-        print(f"- {file_path.name}: {len(chunks)} chunks")
-
         for idx, chunk in enumerate(chunks):
             rows.append((file_path.name, idx, chunk, embed(chunk)))
 
     if not rows:
-        print("No chunks created. Nothing to index.")
-        return
+        return IngestResult(files_processed=len(files), chunks_indexed=0, deleted_rows=0, moved_files=[])
 
+    deleted_rows = 0
     conn = db_conn()
     try:
         ensure_schema(conn, len(rows[0][3]))
         with conn.cursor() as cur:
+            if replace_existing:
+                for file_path in files:
+                    cur.execute(
+                        f"DELETE FROM {SUPABASE_TABLE} WHERE source = %s",
+                        (file_path.name,),
+                    )
+                    deleted_rows += cur.rowcount
+
             cur.executemany(
                 f"""
                 INSERT INTO {SUPABASE_TABLE} (source, chunk_index, content, embedding)
@@ -196,13 +248,30 @@ def main() -> None:
     finally:
         conn.close()
 
-    print(f"Indexed {len(rows)} chunk(s) to Supabase table '{SUPABASE_TABLE}'")
-
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    moved_files: List[str] = []
     for file_path in files:
         destination = PROCESSED_DIR / f"{timestamp}-{file_path.name}"
         shutil.move(str(file_path), destination)
+        moved_files.append(destination.name)
 
+    return IngestResult(
+        files_processed=len(files),
+        chunks_indexed=len(rows),
+        deleted_rows=deleted_rows,
+        moved_files=moved_files,
+    )
+
+
+def main() -> None:
+    result = ingest_pending_files(target_files=None, replace_existing=True)
+    if result.files_processed == 0:
+        print("No files found in shared/rag-files/pending")
+        return
+
+    print(f"Found {result.files_processed} file(s) to process")
+    print(f"Deleted {result.deleted_rows} existing chunk(s) due to dedup replace mode")
+    print(f"Indexed {result.chunks_indexed} chunk(s) to Supabase table '{SUPABASE_TABLE}'")
     print("Moved processed files to shared/rag-files/processed")
 
 

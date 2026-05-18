@@ -4,7 +4,7 @@ RAG (Retrieval-Augmented Generation) local yang dibangun dengan acuan:
 [theaiautomators/self-hosted-ai-starter-kit](https://github.com/theaiautomators/self-hosted-ai-starter-kit).
 
 Proyek ini berisi:
-- Stack Docker: `n8n + Ollama + Supabase Postgres (pgvector) + PostgreSQL + Docling + static file server`
+- Stack Docker: `n8n + Ollama + Supabase Postgres (pgvector) + PostgreSQL + Docling + RAG API + static file server`
 - Integrasi opsional `n8n-mcp` untuk akses MCP ke dokumentasi dan manajemen workflow n8n
 - Script RAG Python untuk:
   - ingest dokumen (`txt`, `md`, `pdf`) ke Supabase lokal
@@ -28,6 +28,7 @@ Service utama:
 - Ollama API: <http://localhost:11434>
 - Supabase Postgres: `localhost:${SUPABASE_DB_PORT:-54322}`
 - Docling: <http://localhost:5001>
+- RAG API: <http://localhost:8800>
 - Static file server: <http://localhost:8080>
 - n8n-mcp (opsional): <http://localhost:3000/mcp>
 
@@ -78,6 +79,9 @@ OLLAMA_CHAT_MODEL=llama3.2
 RAG_CHUNK_SIZE=900
 RAG_CHUNK_OVERLAP=150
 RAG_TOP_K=5
+GDRIVE_INBOX_FOLDER_ID=
+GDRIVE_PROCESSED_FOLDER_ID=
+GDRIVE_DRIVE_ID=
 ```
 
 ## 6) Struktur penting
@@ -85,11 +89,39 @@ RAG_TOP_K=5
 - `docker-compose.yml` - stack infrastruktur lokal
 - `rag/ingest.py` - indexing dokumen ke Supabase (pgvector)
 - `rag/query.py` - retrieval + generation dari Supabase
+- `rag/api.py` - endpoint HTTP ingest/check/delete untuk orkestrasi n8n
 - `rag/requirements.txt` - dependensi Python
 - `shared/rag-files/pending/` - folder input dokumen
 - `shared/rag-files/processed/` - arsip dokumen terproses
+- `shared/docling-scratch/` - hasil proses Docling (termasuk artefak image) di lokal repo
+- `n8n/demo-data/workflows/` - workflow JSON siap import n8n
 
-## 7) Menjalankan n8n-mcp (opsional)
+## 7) Workflow n8n untuk ingest (Webhook + Google Drive)
+
+Workflow yang disediakan:
+- `PG_RAG_2026 - RAG Ingest via Webhook`
+- `PG_RAG_2026 - Google Drive Inbox to Supabase RAG`
+
+Fitur penting di workflow:
+- Deduplikasi sumber dokumen: cek chunk existing berdasarkan `source` -> hapus dulu -> ingest ulang terbaru.
+- Jalur Google Drive: file baru di folder inbox akan diproses lalu dipindahkan ke folder processed agar tidak diproses ulang.
+- Jalur Docling: node Docling dipanggil dan artefak disimpan di folder repo (`shared/docling-scratch`).
+
+Webhook ingest:
+- Endpoint: `POST /webhook/pg-rag-2026/ingest`
+- Payload minimum JSON: `{\"fileName\":\"nama-file-di-pending.pdf\"}`
+- Alternatif: kirim multipart file pada binary field `data`, workflow akan tulis file ke `shared/rag-files/pending`.
+
+Google Drive ingest:
+1. Isi `.env`:
+   - `GDRIVE_INBOX_FOLDER_ID`
+   - `GDRIVE_PROCESSED_FOLDER_ID`
+   - `GDRIVE_DRIVE_ID`
+2. Di n8n, pasang credential `Google Drive account`.
+3. Aktivasi workflow Google Drive.
+4. Upload file ke folder inbox; setelah sukses ingest, file dipindah ke folder processed otomatis.
+
+## 8) Menjalankan n8n-mcp (opsional)
 
 `n8n-mcp` dipakai kalau kita ingin agent/LLM mengakses tools khusus n8n via MCP.
 
@@ -123,7 +155,7 @@ Catatan:
 - `N8N_API_KEY` opsional. Tanpa ini, `n8n-mcp` tetap bisa dipakai untuk dokumentasi/validasi node.
 - Untuk manajemen workflow (create/update/execute), isi `N8N_API_KEY` dari n8n.
 
-## 8) Publish ke GitHub (repo: PG_RAG_2026)
+## 9) Publish ke GitHub (repo: PG_RAG_2026)
 
 Jika belum login GitHub CLI:
 

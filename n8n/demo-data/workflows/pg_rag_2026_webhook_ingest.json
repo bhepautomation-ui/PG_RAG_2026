@@ -1,0 +1,276 @@
+{
+  "createdAt": "2026-05-18T03:37:00.000Z",
+  "updatedAt": "2026-05-18T03:37:00.000Z",
+  "id": "pgRAG2026WebhookIngest",
+  "name": "PG_RAG_2026 - RAG Ingest via Webhook",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pg-rag-2026/ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        20
+      ],
+      "webhookId": "pg-rag-2026-ingest"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first();\nconst src = input.json || {};\nconst binary = input.binary || {};\nconst fileFromBinary = binary.data?.fileName;\nconst fileName = fileFromBinary || src.fileName;\nif (!fileName) {\n  throw new Error('fileName wajib diisi (atau kirim multipart file pada binary field data).');\n}\nreturn [{ json: { ...src, fileName } , binary }];"
+      },
+      "id": "normalize-input",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -470,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$binary.data }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-has-binary",
+      "name": "IF Binary Uploaded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/data/rag-files/pending/{{$json.fileName}}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "write-pending",
+      "name": "Write File to Pending",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -10,
+        -70
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://rag-api:8800/source/{{$('Normalize Input').item.json.fileName}}/count",
+        "sendBody": false,
+        "options": {}
+      },
+      "id": "check-existing",
+      "name": "Check Existing Chunks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.chunk_count || 0 }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-existing",
+      "name": "IF Existing Chunks > 0",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        450,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=http://rag-api:8800/source/{{$('Normalize Input').item.json.fileName}}",
+        "sendBody": false,
+        "options": {}
+      },
+      "id": "delete-existing",
+      "name": "Delete Existing Source",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        -70
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://rag-api:8800/ingest",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { files: [$('Normalize Input').item.json.fileName], replace_existing: true } }}",
+        "options": {}
+      },
+      "id": "ingest-file",
+      "name": "Ingest to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        910,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1140,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "IF Binary Uploaded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Binary Uploaded": {
+      "main": [
+        [
+          {
+            "node": "Write File to Pending",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Existing Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write File to Pending": {
+      "main": [
+        [
+          {
+            "node": "Check Existing Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Existing Chunks": {
+      "main": [
+        [
+          {
+            "node": "IF Existing Chunks > 0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Existing Chunks > 0": {
+      "main": [
+        [
+          {
+            "node": "Delete Existing Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ingest to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Existing Source": {
+      "main": [
+        [
+          {
+            "node": "Ingest to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "versionId": "0f31836e-66f7-43f9-970f-a39c5e52c00e",
+  "triggerCount": 0,
+  "tags": []
+}

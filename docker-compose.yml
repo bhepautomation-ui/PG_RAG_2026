@@ -21,7 +21,7 @@ x-n8n: &service-n8n
     - N8N_ENCRYPTION_KEY
     - N8N_USER_MANAGEMENT_JWT_SECRET
     - OLLAMA_HOST=${OLLAMA_HOST:-ollama:11434}
-    - N8N_RESTRICT_FILE_ACCESS_TO=/data/shared
+    - N8N_RESTRICT_FILE_ACCESS_TO=/data/shared,/data/rag-files
     - NODES_EXCLUDE=[]
   env_file:
     - path: .env
@@ -148,6 +148,29 @@ services:
         condition: service_healthy
       n8n-import:
         condition: service_completed_successfully
+
+  rag-api:
+    build:
+      context: ./rag
+      dockerfile: Dockerfile
+    hostname: rag-api
+    container_name: rag-api
+    networks: ['demo']
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      - SUPABASE_DB_HOST=supabase-db
+      - SUPABASE_DB_PORT=5432
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ./shared:/app/shared
+    ports:
+      - 8800:8800
+    depends_on:
+      supabase-db:
+        condition: service_healthy
 
   n8n-mcp:
     image: ghcr.io/czlonkowski/n8n-mcp:latest

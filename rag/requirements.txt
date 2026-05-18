@@ -2,3 +2,5 @@ requests==2.32.3
 pypdf==5.0.1
 psycopg[binary]==3.2.13
 pgvector==0.3.6
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
