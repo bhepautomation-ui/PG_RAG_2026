@@ -149,6 +149,27 @@ services:
       n8n-import:
         condition: service_completed_successfully
 
+  n8n-mcp:
+    image: ghcr.io/czlonkowski/n8n-mcp:latest
+    hostname: n8n-mcp
+    container_name: n8n-mcp
+    profiles: ["mcp"]
+    networks: ['demo']
+    restart: unless-stopped
+    ports:
+      - 3000:3000
+    environment:
+      - N8N_MODE=true
+      - MCP_MODE=http
+      - N8N_API_URL=http://n8n:5678
+      - N8N_API_KEY=${N8N_API_KEY:-}
+      - WEBHOOK_SECURITY_MODE=permissive
+      - MCP_AUTH_TOKEN=${N8N_MCP_AUTH_TOKEN:-replace-with-32-char-minimum-token}
+      - AUTH_TOKEN=${N8N_MCP_AUTH_TOKEN:-replace-with-32-char-minimum-token}
+      - LOG_LEVEL=info
+    depends_on:
+      - n8n
+
   qdrant:
     image: qdrant/qdrant
     hostname: qdrant

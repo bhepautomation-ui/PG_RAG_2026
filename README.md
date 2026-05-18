@@ -5,6 +5,7 @@ RAG (Retrieval-Augmented Generation) local yang dibangun dengan acuan:
 
 Proyek ini berisi:
 - Stack Docker: `n8n + Ollama + Qdrant + PostgreSQL + Docling + static file server`
+- Integrasi opsional `n8n-mcp` untuk akses MCP ke dokumentasi dan manajemen workflow n8n
 - Script RAG Python untuk:
   - ingest dokumen (`txt`, `md`, `pdf`) ke Qdrant
   - query tanya-jawab berbasis konteks dokumen
@@ -28,6 +29,7 @@ Service utama:
 - Qdrant: <http://localhost:6333>
 - Docling: <http://localhost:5001>
 - Static file server: <http://localhost:8080>
+- n8n-mcp (opsional): <http://localhost:3000/mcp>
 
 ## 3) Ingest dokumen ke knowledge base
 
@@ -83,7 +85,40 @@ RAG_TOP_K=5
 - `shared/rag-files/pending/` - folder input dokumen
 - `shared/rag-files/processed/` - arsip dokumen terproses
 
-## 7) Publish ke GitHub (repo: PG_RAG_2026)
+## 7) Menjalankan n8n-mcp (opsional)
+
+`n8n-mcp` dipakai kalau kita ingin agent/LLM mengakses tools khusus n8n via MCP.
+
+1. Pastikan token di `.env` sudah diisi:
+
+```env
+N8N_MCP_AUTH_TOKEN=replace-with-32-char-minimum-token
+N8N_API_KEY= # opsional, untuk workflow management
+```
+
+2. Jalankan stack dengan profile MCP:
+
+```bash
+make up-mcp
+```
+
+3. Endpoint MCP yang dipakai client:
+
+```text
+http://localhost:3000/mcp
+```
+
+4. Header auth yang dibutuhkan:
+
+```text
+Authorization: Bearer <N8N_MCP_AUTH_TOKEN>
+```
+
+Catatan:
+- `N8N_API_KEY` opsional. Tanpa ini, `n8n-mcp` tetap bisa dipakai untuk dokumentasi/validasi node.
+- Untuk manajemen workflow (create/update/execute), isi `N8N_API_KEY` dari n8n.
+
+## 8) Publish ke GitHub (repo: PG_RAG_2026)
 
 Jika belum login GitHub CLI:
 
@@ -107,3 +142,4 @@ Jika ingin private, ganti `--public` menjadi `--private`.
 
 - Base template: [theaiautomators/self-hosted-ai-starter-kit](https://github.com/theaiautomators/self-hosted-ai-starter-kit)
 - Original upstream: [n8n-io/self-hosted-ai-starter-kit](https://github.com/n8n-io/self-hosted-ai-starter-kit)
+- n8n-mcp: [czlonkowski/n8n-mcp](https://github.com/czlonkowski/n8n-mcp)

@@ -1,4 +1,4 @@
-.PHONY: setup up down logs ingest ask
+.PHONY: setup up up-mcp down logs ingest ask
 
 setup:
 	python3 -m venv .venv
@@ -7,6 +7,9 @@ setup:
 
 up:
 	docker compose --profile cpu up -d
+
+up-mcp:
+	docker compose --profile cpu --profile mcp up -d
 
 down:
 	docker compose down
